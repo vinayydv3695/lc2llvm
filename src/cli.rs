@@ -1,17 +1,26 @@
 use std::env;
 use std::fs;
+use std::io::{self, BufRead};
 use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::codegen::generate_llvm_ir;
+use crate::interpreter::{eval, format_value};
 use crate::lexer::tokenize;
 use crate::parser::parse;
 use crate::transform::run_pipeline;
 
 pub fn run() -> Result<(), String> {
-    let (input, output) = parse_args(env::args().collect())?;
-    let source = fs::read_to_string(&input)
+    match parse_args(env::args().collect())? {
+        Mode::Compile { input, output } => run_compile(&input, &output),
+        Mode::Interp { input } => run_interp(&input),
+        Mode::Repl => run_repl(),
+    }
+}
+
+fn run_compile(input: &Path, output: &Path) -> Result<(), String> {
+    let source = fs::read_to_string(input)
         .map_err(|e| format!("failed to read {}: {e}", input.display()))?;
 
     let tokens = tokenize(&source)?;
@@ -20,49 +29,119 @@ pub fn run() -> Result<(), String> {
     let _ = (&pipeline.alpha, &pipeline.closure, &pipeline.lifted);
     let ir = generate_llvm_ir(&pipeline.anf)?;
 
-    match infer_output_kind(&output) {
+    match infer_output_kind(output) {
         OutputKind::Ll => {
-            fs::write(&output, ir)
+            fs::write(output, ir)
                 .map_err(|e| format!("failed to write {}: {e}", output.display()))?;
         }
-        OutputKind::Obj => emit_object(&ir, &output)?,
-        OutputKind::Exe => emit_executable(&ir, &output)?,
+        OutputKind::Obj => emit_object(&ir, output)?,
+        OutputKind::Exe => emit_executable(&ir, output)?,
     }
 
     Ok(())
 }
 
-fn parse_args(args: Vec<String>) -> Result<(PathBuf, PathBuf), String> {
+fn run_interp(input: &Path) -> Result<(), String> {
+    let source = fs::read_to_string(input)
+        .map_err(|e| format!("failed to read {}: {e}", input.display()))?;
+    let result = interpret_source(&source)?;
+    println!("{result}");
+    Ok(())
+}
+
+fn run_repl() -> Result<(), String> {
+    let stdin = io::stdin();
+    for line in stdin.lock().lines() {
+        let line = line.map_err(|e| e.to_string())?;
+        let trimmed = line.trim();
+        if trimmed == ":quit" {
+            break;
+        }
+        if trimmed.is_empty() {
+            continue;
+        }
+        let result = interpret_source(&line)?;
+        println!("{result}");
+    }
+    Ok(())
+}
+
+fn interpret_source(source: &str) -> Result<String, String> {
+    let tokens = tokenize(source)?;
+    let expr = parse(&tokens)?;
+    let value = eval(&expr)?;
+    Ok(format_value(&value))
+}
+
+enum Mode {
+    Compile { input: PathBuf, output: PathBuf },
+    Interp { input: PathBuf },
+    Repl,
+}
+
+fn parse_args(args: Vec<String>) -> Result<Mode, String> {
     if args.len() < 2 {
-        return Err("usage: lamc <input.lc> [-o output]".to_string());
+        return Err(
+            "usage: lamc <input.lc> [-o output] | lamc --interp <input.lc> | lamc --repl"
+                .to_string(),
+        );
     }
 
     let mut input: Option<PathBuf> = None;
     let mut output = PathBuf::from("output.ll");
+    let mut mode: Option<Mode> = None;
     let mut i = 1;
 
     while i < args.len() {
         let arg = &args[i];
-        if arg == "-o" {
-            if i + 1 >= args.len() {
-                return Err("-o requires output path".to_string());
+        match arg.as_str() {
+            "--repl" => {
+                if mode.is_some() {
+                    return Err(format!("unexpected argument: {arg}"));
+                }
+                mode = Some(Mode::Repl);
+                i += 1;
             }
-            output = PathBuf::from(&args[i + 1]);
-            i += 2;
-            continue;
+            "--interp" => {
+                if mode.is_some() {
+                    return Err(format!("unexpected argument: {arg}"));
+                }
+                if i + 1 >= args.len() {
+                    return Err("--interp requires input path".to_string());
+                }
+                mode = Some(Mode::Interp {
+                    input: PathBuf::from(&args[i + 1]),
+                });
+                i += 2;
+            }
+            "-o" => {
+                if i + 1 >= args.len() {
+                    return Err("-o requires output path".to_string());
+                }
+                output = PathBuf::from(&args[i + 1]);
+                i += 2;
+            }
+            _ => {
+                if mode.is_some() {
+                    return Err(format!("unexpected argument: {arg}"));
+                }
+                if input.is_none() {
+                    input = Some(PathBuf::from(arg));
+                    i += 1;
+                } else {
+                    return Err(format!("unexpected argument: {arg}"));
+                }
+            }
         }
-
-        if input.is_none() {
-            input = Some(PathBuf::from(arg));
-            i += 1;
-            continue;
-        }
-
-        return Err(format!("unexpected argument: {arg}"));
     }
 
-    let input = input.ok_or_else(|| "missing input path".to_string())?;
-    Ok((input, output))
+    Ok(match mode {
+        Some(mode) => mode,
+        None => Mode::Compile {
+            input: input.ok_or_else(|| "missing input path".to_string())?,
+            output,
+        },
+    })
 }
 
 enum OutputKind {

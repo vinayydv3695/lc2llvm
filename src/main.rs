@@ -1,6 +1,7 @@
 mod ast;
 mod cli;
 mod codegen;
+mod interpreter;
 mod lexer;
 mod parser;
 mod transform;
