@@ -1,4 +1,3 @@
-Here’s a **clean, concise, professional README** with **SVG-style badges/icons** and no fluff:
 
 ---
 
