@@ -30,6 +30,8 @@ struct Codegen<'ctx> {
     value_ptr_type: PointerType<'ctx>,
     closure_ty: StructType<'ctx>,
     closure_ptr_type: PointerType<'ctx>,
+    prim2_ty: StructType<'ctx>,
+    prim2_ptr_type: PointerType<'ctx>,
     call_fn_type: FunctionType<'ctx>,
     call_fn_ptr_type: PointerType<'ctx>,
     malloc_fn: FunctionValue<'ctx>,
@@ -54,6 +56,18 @@ impl<'ctx> Codegen<'ctx> {
         let value_ptr_type = context.ptr_type(AddressSpace::default());
         let closure_ptr_type = context.ptr_type(AddressSpace::default());
 
+        let prim2_ty = context.opaque_struct_type("Prim2");
+        prim2_ty.set_body(
+            &[
+                i64_type.into(),
+                i64_type.into(),
+                value_ty.into(),
+                value_ty.into(),
+            ],
+            false,
+        );
+        let prim2_ptr_type = context.ptr_type(AddressSpace::default());
+
         let call_fn_type = value_ty.fn_type(&[i8_ptr_type.into(), value_ty.into()], false);
         let call_fn_ptr_type = context.ptr_type(AddressSpace::default());
 
@@ -73,6 +87,8 @@ impl<'ctx> Codegen<'ctx> {
             value_ptr_type,
             closure_ty,
             closure_ptr_type,
+            prim2_ty,
+            prim2_ptr_type,
             call_fn_type,
             call_fn_ptr_type,
             malloc_fn,
@@ -229,13 +245,16 @@ impl<'ctx> Codegen<'ctx> {
                 .copied()
                 .ok_or_else(|| format!("unbound variable in codegen: {v}")),
             AnfAtom::Int(n) => self.make_int(*n),
-            AnfAtom::Prim(name) => {
-                let id = match name.as_str() {
-                    "print" => 0,
-                    _ => return Err(format!("unknown primitive: {name}")),
-                };
-                self.make_prim(id)
-            }
+            AnfAtom::Prim(name) => match name.as_str() {
+                "true" => self.make_int(1),
+                "false" => self.make_int(0),
+                "print" => self.make_prim(0),
+                "add" => self.make_prim(1),
+                "sub" => self.make_prim(2),
+                "mul" => self.make_prim(3),
+                "if" => self.make_prim(4),
+                _ => Err(format!("unknown primitive: {name}")),
+            },
             AnfAtom::MakeClosure { func, captures } => {
                 let target = *fn_map
                     .get(func)
@@ -255,12 +274,77 @@ impl<'ctx> Codegen<'ctx> {
         let payload = self.extract_payload(callee)?;
 
         let closure_block = self.context.append_basic_block(current_fn, "app_closure");
-        let prim_check_block = self
+        let prim1_check_block = self
             .context
-            .append_basic_block(current_fn, "app_prim_check");
-        let prim_print_block = self
+            .append_basic_block(current_fn, "app_prim1_check");
+        let prim1_dispatch_block = self
             .context
-            .append_basic_block(current_fn, "app_prim_print");
+            .append_basic_block(current_fn, "app_prim1_dispatch");
+        let prim1_print_block = self
+            .context
+            .append_basic_block(current_fn, "app_prim1_print");
+        let prim1_add_check_block = self
+            .context
+            .append_basic_block(current_fn, "app_prim1_add_check");
+        let prim1_sub_check_block = self
+            .context
+            .append_basic_block(current_fn, "app_prim1_sub_check");
+        let prim1_mul_check_block = self
+            .context
+            .append_basic_block(current_fn, "app_prim1_mul_check");
+        let prim1_if_check_block = self
+            .context
+            .append_basic_block(current_fn, "app_prim1_if_check");
+        let prim1_partial_block = self
+            .context
+            .append_basic_block(current_fn, "app_prim1_partial");
+        let prim1_unknown_block = self
+            .context
+            .append_basic_block(current_fn, "app_prim1_unknown");
+
+        let prim2_check_block = self
+            .context
+            .append_basic_block(current_fn, "app_prim2_check");
+        let prim2_dispatch_block = self
+            .context
+            .append_basic_block(current_fn, "app_prim2_dispatch");
+        let prim2_add_stage_check_block = self
+            .context
+            .append_basic_block(current_fn, "app_prim2_add_stage_check");
+        let prim2_add_block = self.context.append_basic_block(current_fn, "app_prim2_add");
+        let prim2_sub_check_block = self
+            .context
+            .append_basic_block(current_fn, "app_prim2_sub_check");
+        let prim2_sub_stage_check_block = self
+            .context
+            .append_basic_block(current_fn, "app_prim2_sub_stage_check");
+        let prim2_sub_block = self.context.append_basic_block(current_fn, "app_prim2_sub");
+        let prim2_mul_check_block = self
+            .context
+            .append_basic_block(current_fn, "app_prim2_mul_check");
+        let prim2_mul_stage_check_block = self
+            .context
+            .append_basic_block(current_fn, "app_prim2_mul_stage_check");
+        let prim2_mul_block = self.context.append_basic_block(current_fn, "app_prim2_mul");
+        let prim2_if_check_block = self
+            .context
+            .append_basic_block(current_fn, "app_prim2_if_check");
+        let prim2_if_stage1_check_block = self
+            .context
+            .append_basic_block(current_fn, "app_prim2_if_stage1_check");
+        let prim2_if_stage1_block = self
+            .context
+            .append_basic_block(current_fn, "app_prim2_if_stage1");
+        let prim2_if_stage2_check_block = self
+            .context
+            .append_basic_block(current_fn, "app_prim2_if_stage2_check");
+        let prim2_if_stage2_block = self
+            .context
+            .append_basic_block(current_fn, "app_prim2_if_stage2");
+        let prim2_unknown_block = self
+            .context
+            .append_basic_block(current_fn, "app_prim2_unknown");
+
         let bad_block = self.context.append_basic_block(current_fn, "app_bad");
         let merge_block = self.context.append_basic_block(current_fn, "app_merge");
 
@@ -274,7 +358,7 @@ impl<'ctx> Codegen<'ctx> {
             )
             .map_err(builder_err)?;
         self.builder
-            .build_conditional_branch(is_closure, closure_block, prim_check_block)
+            .build_conditional_branch(is_closure, closure_block, prim1_check_block)
             .map_err(builder_err)?;
 
         self.builder.position_at_end(closure_block);
@@ -326,21 +410,21 @@ impl<'ctx> Codegen<'ctx> {
             .get_insert_block()
             .ok_or_else(|| "missing closure block".to_string())?;
 
-        self.builder.position_at_end(prim_check_block);
-        let is_prim = self
+        self.builder.position_at_end(prim1_check_block);
+        let is_prim1 = self
             .builder
             .build_int_compare(
                 inkwell::IntPredicate::EQ,
                 tag,
                 self.i64_type.const_int(2, false),
-                "is_prim",
+                "is_prim1",
             )
             .map_err(builder_err)?;
         self.builder
-            .build_conditional_branch(is_prim, prim_print_block, bad_block)
+            .build_conditional_branch(is_prim1, prim1_dispatch_block, prim2_check_block)
             .map_err(builder_err)?;
 
-        self.builder.position_at_end(prim_print_block);
+        self.builder.position_at_end(prim1_dispatch_block);
         let is_print = self
             .builder
             .build_int_compare(
@@ -350,17 +434,11 @@ impl<'ctx> Codegen<'ctx> {
                 "is_print",
             )
             .map_err(builder_err)?;
-
-        let prim_do_print_block = self.context.append_basic_block(current_fn, "app_do_print");
-        let prim_unknown_block = self
-            .context
-            .append_basic_block(current_fn, "app_unknown_prim");
-
         self.builder
-            .build_conditional_branch(is_print, prim_do_print_block, prim_unknown_block)
+            .build_conditional_branch(is_print, prim1_print_block, prim1_add_check_block)
             .map_err(builder_err)?;
 
-        self.builder.position_at_end(prim_do_print_block);
+        self.builder.position_at_end(prim1_print_block);
         let arg_payload = self.extract_payload(arg)?;
         self.builder
             .build_call(self.print_int_fn, &[arg_payload.into()], "print_call")
@@ -368,20 +446,374 @@ impl<'ctx> Codegen<'ctx> {
         self.builder
             .build_unconditional_branch(merge_block)
             .map_err(builder_err)?;
-        let prim_print_end = self
+        let prim1_print_end = self
             .builder
             .get_insert_block()
-            .ok_or_else(|| "missing prim print block".to_string())?;
+            .ok_or_else(|| "missing prim1 print block".to_string())?;
 
-        self.builder.position_at_end(prim_unknown_block);
-        let unknown_result = self.make_int(0)?;
+        self.builder.position_at_end(prim1_add_check_block);
+        let is_add = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::EQ,
+                payload,
+                self.i64_type.const_int(1, false),
+                "is_add",
+            )
+            .map_err(builder_err)?;
+        self.builder
+            .build_conditional_branch(is_add, prim1_partial_block, prim1_sub_check_block)
+            .map_err(builder_err)?;
+
+        self.builder.position_at_end(prim1_sub_check_block);
+        let is_sub = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::EQ,
+                payload,
+                self.i64_type.const_int(2, false),
+                "is_sub",
+            )
+            .map_err(builder_err)?;
+        self.builder
+            .build_conditional_branch(is_sub, prim1_partial_block, prim1_mul_check_block)
+            .map_err(builder_err)?;
+
+        self.builder.position_at_end(prim1_mul_check_block);
+        let is_mul = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::EQ,
+                payload,
+                self.i64_type.const_int(3, false),
+                "is_mul",
+            )
+            .map_err(builder_err)?;
+        self.builder
+            .build_conditional_branch(is_mul, prim1_partial_block, prim1_if_check_block)
+            .map_err(builder_err)?;
+
+        self.builder.position_at_end(prim1_if_check_block);
+        let is_if = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::EQ,
+                payload,
+                self.i64_type.const_int(4, false),
+                "is_if",
+            )
+            .map_err(builder_err)?;
+        self.builder
+            .build_conditional_branch(is_if, prim1_partial_block, prim1_unknown_block)
+            .map_err(builder_err)?;
+
+        self.builder.position_at_end(prim1_partial_block);
+        let prim1_partial_result = self.make_prim_partial(
+            payload,
+            self.i64_type.const_int(1, false),
+            arg,
+            self.value_ty.get_undef(),
+        )?;
         self.builder
             .build_unconditional_branch(merge_block)
             .map_err(builder_err)?;
-        let prim_unknown_end = self
+        let prim1_partial_end = self
             .builder
             .get_insert_block()
-            .ok_or_else(|| "missing prim unknown block".to_string())?;
+            .ok_or_else(|| "missing prim1 partial block".to_string())?;
+
+        self.builder.position_at_end(prim1_unknown_block);
+        let prim1_unknown_result = self.make_int(0)?;
+        self.builder
+            .build_unconditional_branch(merge_block)
+            .map_err(builder_err)?;
+        let prim1_unknown_end = self
+            .builder
+            .get_insert_block()
+            .ok_or_else(|| "missing prim1 unknown block".to_string())?;
+
+        self.builder.position_at_end(prim2_check_block);
+        let is_prim2 = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::EQ,
+                tag,
+                self.i64_type.const_int(3, false),
+                "is_prim2",
+            )
+            .map_err(builder_err)?;
+        self.builder
+            .build_conditional_branch(is_prim2, prim2_dispatch_block, bad_block)
+            .map_err(builder_err)?;
+
+        self.builder.position_at_end(prim2_dispatch_block);
+        let prim2_raw = self
+            .builder
+            .build_int_to_ptr(payload, self.i8_ptr_type, "prim2_raw")
+            .map_err(builder_err)?;
+        let prim2_ptr = self
+            .builder
+            .build_pointer_cast(prim2_raw, self.prim2_ptr_type, "prim2_ptr")
+            .map_err(builder_err)?;
+        let op_slot = self
+            .builder
+            .build_struct_gep(self.prim2_ty, prim2_ptr, 0, "prim2_op_slot")
+            .map_err(builder_err)?;
+        let stage_slot = self
+            .builder
+            .build_struct_gep(self.prim2_ty, prim2_ptr, 1, "prim2_stage_slot")
+            .map_err(builder_err)?;
+        let v0_slot = self
+            .builder
+            .build_struct_gep(self.prim2_ty, prim2_ptr, 2, "prim2_v0_slot")
+            .map_err(builder_err)?;
+        let v1_slot = self
+            .builder
+            .build_struct_gep(self.prim2_ty, prim2_ptr, 3, "prim2_v1_slot")
+            .map_err(builder_err)?;
+
+        let op_id = self
+            .builder
+            .build_load(self.i64_type, op_slot, "prim2_op")
+            .map_err(builder_err)?
+            .into_int_value();
+        let stage = self
+            .builder
+            .build_load(self.i64_type, stage_slot, "prim2_stage")
+            .map_err(builder_err)?
+            .into_int_value();
+        let v0 = self
+            .builder
+            .build_load(self.value_ty, v0_slot, "prim2_v0")
+            .map_err(builder_err)?
+            .into_struct_value();
+        let v1 = self
+            .builder
+            .build_load(self.value_ty, v1_slot, "prim2_v1")
+            .map_err(builder_err)?
+            .into_struct_value();
+
+        let is_add2 = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::EQ,
+                op_id,
+                self.i64_type.const_int(1, false),
+                "is_add2",
+            )
+            .map_err(builder_err)?;
+        self.builder
+            .build_conditional_branch(is_add2, prim2_add_stage_check_block, prim2_sub_check_block)
+            .map_err(builder_err)?;
+
+        self.builder.position_at_end(prim2_add_stage_check_block);
+        let add_stage_ok = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::EQ,
+                stage,
+                self.i64_type.const_int(1, false),
+                "add_stage_ok",
+            )
+            .map_err(builder_err)?;
+        self.builder
+            .build_conditional_branch(add_stage_ok, prim2_add_block, prim2_unknown_block)
+            .map_err(builder_err)?;
+
+        self.builder.position_at_end(prim2_sub_check_block);
+        let is_sub2 = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::EQ,
+                op_id,
+                self.i64_type.const_int(2, false),
+                "is_sub2",
+            )
+            .map_err(builder_err)?;
+        self.builder
+            .build_conditional_branch(is_sub2, prim2_sub_stage_check_block, prim2_mul_check_block)
+            .map_err(builder_err)?;
+
+        self.builder.position_at_end(prim2_sub_stage_check_block);
+        let sub_stage_ok = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::EQ,
+                stage,
+                self.i64_type.const_int(1, false),
+                "sub_stage_ok",
+            )
+            .map_err(builder_err)?;
+        self.builder
+            .build_conditional_branch(sub_stage_ok, prim2_sub_block, prim2_unknown_block)
+            .map_err(builder_err)?;
+
+        self.builder.position_at_end(prim2_mul_check_block);
+        let is_mul2 = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::EQ,
+                op_id,
+                self.i64_type.const_int(3, false),
+                "is_mul2",
+            )
+            .map_err(builder_err)?;
+        self.builder
+            .build_conditional_branch(is_mul2, prim2_mul_stage_check_block, prim2_if_check_block)
+            .map_err(builder_err)?;
+
+        self.builder.position_at_end(prim2_mul_stage_check_block);
+        let mul_stage_ok = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::EQ,
+                stage,
+                self.i64_type.const_int(1, false),
+                "mul_stage_ok",
+            )
+            .map_err(builder_err)?;
+        self.builder
+            .build_conditional_branch(mul_stage_ok, prim2_mul_block, prim2_unknown_block)
+            .map_err(builder_err)?;
+
+        self.builder.position_at_end(prim2_if_check_block);
+        let is_if2 = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::EQ,
+                op_id,
+                self.i64_type.const_int(4, false),
+                "is_if2",
+            )
+            .map_err(builder_err)?;
+        self.builder
+            .build_conditional_branch(is_if2, prim2_if_stage1_check_block, prim2_unknown_block)
+            .map_err(builder_err)?;
+
+        self.builder.position_at_end(prim2_if_stage1_check_block);
+        let if_stage1 = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::EQ,
+                stage,
+                self.i64_type.const_int(1, false),
+                "if_stage1",
+            )
+            .map_err(builder_err)?;
+        self.builder
+            .build_conditional_branch(
+                if_stage1,
+                prim2_if_stage1_block,
+                prim2_if_stage2_check_block,
+            )
+            .map_err(builder_err)?;
+
+        self.builder.position_at_end(prim2_if_stage2_check_block);
+        let if_stage2 = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::EQ,
+                stage,
+                self.i64_type.const_int(2, false),
+                "if_stage2",
+            )
+            .map_err(builder_err)?;
+        self.builder
+            .build_conditional_branch(if_stage2, prim2_if_stage2_block, prim2_unknown_block)
+            .map_err(builder_err)?;
+
+        self.builder.position_at_end(prim2_add_block);
+        let lhs_add = self.extract_payload(v0)?;
+        let rhs_add = self.extract_payload(arg)?;
+        let add_out = self
+            .builder
+            .build_int_add(lhs_add, rhs_add, "add_out")
+            .map_err(builder_err)?;
+        let prim2_add_result = self.make_int_from_value(add_out)?;
+        self.builder
+            .build_unconditional_branch(merge_block)
+            .map_err(builder_err)?;
+        let prim2_add_end = self
+            .builder
+            .get_insert_block()
+            .ok_or_else(|| "missing prim2 add block".to_string())?;
+
+        self.builder.position_at_end(prim2_sub_block);
+        let lhs_sub = self.extract_payload(v0)?;
+        let rhs_sub = self.extract_payload(arg)?;
+        let sub_out = self
+            .builder
+            .build_int_sub(lhs_sub, rhs_sub, "sub_out")
+            .map_err(builder_err)?;
+        let prim2_sub_result = self.make_int_from_value(sub_out)?;
+        self.builder
+            .build_unconditional_branch(merge_block)
+            .map_err(builder_err)?;
+        let prim2_sub_end = self
+            .builder
+            .get_insert_block()
+            .ok_or_else(|| "missing prim2 sub block".to_string())?;
+
+        self.builder.position_at_end(prim2_mul_block);
+        let lhs_mul = self.extract_payload(v0)?;
+        let rhs_mul = self.extract_payload(arg)?;
+        let mul_out = self
+            .builder
+            .build_int_mul(lhs_mul, rhs_mul, "mul_out")
+            .map_err(builder_err)?;
+        let prim2_mul_result = self.make_int_from_value(mul_out)?;
+        self.builder
+            .build_unconditional_branch(merge_block)
+            .map_err(builder_err)?;
+        let prim2_mul_end = self
+            .builder
+            .get_insert_block()
+            .ok_or_else(|| "missing prim2 mul block".to_string())?;
+
+        self.builder.position_at_end(prim2_if_stage1_block);
+        let prim2_if_stage1_result =
+            self.make_prim_partial(op_id, self.i64_type.const_int(2, false), v0, arg)?;
+        self.builder
+            .build_unconditional_branch(merge_block)
+            .map_err(builder_err)?;
+        let prim2_if_stage1_end = self
+            .builder
+            .get_insert_block()
+            .ok_or_else(|| "missing prim2 if stage1 block".to_string())?;
+
+        self.builder.position_at_end(prim2_if_stage2_block);
+        let cond_payload = self.extract_payload(v0)?;
+        let cond_true = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::NE,
+                cond_payload,
+                self.i64_type.const_zero(),
+                "cond_true",
+            )
+            .map_err(builder_err)?;
+        let prim2_if_stage2_result = self
+            .builder
+            .build_select(cond_true, v1, arg, "if_out")
+            .map_err(builder_err)?
+            .into_struct_value();
+        self.builder
+            .build_unconditional_branch(merge_block)
+            .map_err(builder_err)?;
+        let prim2_if_stage2_end = self
+            .builder
+            .get_insert_block()
+            .ok_or_else(|| "missing prim2 if stage2 block".to_string())?;
+
+        self.builder.position_at_end(prim2_unknown_block);
+        let prim2_unknown_result = self.make_int(0)?;
+        self.builder
+            .build_unconditional_branch(merge_block)
+            .map_err(builder_err)?;
+        let prim2_unknown_end = self
+            .builder
+            .get_insert_block()
+            .ok_or_else(|| "missing prim2 unknown block".to_string())?;
 
         self.builder.position_at_end(bad_block);
         let bad_result = self.make_int(0)?;
@@ -400,8 +832,15 @@ impl<'ctx> Codegen<'ctx> {
             .map_err(builder_err)?;
         phi.add_incoming(&[
             (&closure_result, closure_end),
-            (&arg, prim_print_end),
-            (&unknown_result, prim_unknown_end),
+            (&arg, prim1_print_end),
+            (&prim1_partial_result, prim1_partial_end),
+            (&prim1_unknown_result, prim1_unknown_end),
+            (&prim2_add_result, prim2_add_end),
+            (&prim2_sub_result, prim2_sub_end),
+            (&prim2_mul_result, prim2_mul_end),
+            (&prim2_if_stage1_result, prim2_if_stage1_end),
+            (&prim2_if_stage2_result, prim2_if_stage2_end),
+            (&prim2_unknown_result, prim2_unknown_end),
             (&bad_result, bad_end),
         ]);
 
@@ -505,11 +944,73 @@ impl<'ctx> Codegen<'ctx> {
         )
     }
 
+    fn make_int_from_value(&self, v: IntValue<'ctx>) -> Result<StructValue<'ctx>, String> {
+        self.make_value(self.i64_type.const_zero(), v)
+    }
+
     fn make_prim(&self, id: u64) -> Result<StructValue<'ctx>, String> {
         self.make_value(
             self.i64_type.const_int(2, false),
             self.i64_type.const_int(id, false),
         )
+    }
+
+    fn make_prim_partial(
+        &mut self,
+        prim_id: IntValue<'ctx>,
+        stage: IntValue<'ctx>,
+        v0: StructValue<'ctx>,
+        v1: StructValue<'ctx>,
+    ) -> Result<StructValue<'ctx>, String> {
+        let prim2_raw = self
+            .builder
+            .build_call(
+                self.malloc_fn,
+                &[self.i64_type.const_int(48, false).into()],
+                "prim2_alloc",
+            )
+            .map_err(builder_err)?
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+
+        let prim2_ptr = self
+            .builder
+            .build_pointer_cast(prim2_raw, self.prim2_ptr_type, "prim2_ptr")
+            .map_err(builder_err)?;
+
+        let op_slot = self
+            .builder
+            .build_struct_gep(self.prim2_ty, prim2_ptr, 0, "prim2_op_slot")
+            .map_err(builder_err)?;
+        let stage_slot = self
+            .builder
+            .build_struct_gep(self.prim2_ty, prim2_ptr, 1, "prim2_stage_slot")
+            .map_err(builder_err)?;
+        let v0_slot = self
+            .builder
+            .build_struct_gep(self.prim2_ty, prim2_ptr, 2, "prim2_v0_slot")
+            .map_err(builder_err)?;
+        let v1_slot = self
+            .builder
+            .build_struct_gep(self.prim2_ty, prim2_ptr, 3, "prim2_v1_slot")
+            .map_err(builder_err)?;
+
+        self.builder
+            .build_store(op_slot, prim_id)
+            .map_err(builder_err)?;
+        self.builder
+            .build_store(stage_slot, stage)
+            .map_err(builder_err)?;
+        self.builder.build_store(v0_slot, v0).map_err(builder_err)?;
+        self.builder.build_store(v1_slot, v1).map_err(builder_err)?;
+
+        let raw_i64 = self
+            .builder
+            .build_ptr_to_int(prim2_raw, self.i64_type, "prim2_ptr_i64")
+            .map_err(builder_err)?;
+
+        self.make_value(self.i64_type.const_int(3, false), raw_i64)
     }
 
     fn make_value(

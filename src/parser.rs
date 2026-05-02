@@ -93,5 +93,8 @@ impl<'a> Parser<'a> {
 }
 
 fn is_primitive(name: &str) -> bool {
-    matches!(name, "print")
+    matches!(
+        name,
+        "print" | "add" | "sub" | "mul" | "true" | "false" | "if"
+    )
 }
