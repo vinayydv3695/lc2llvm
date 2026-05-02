@@ -77,3 +77,34 @@ fn is_ident_start(ch: char) -> bool {
 fn is_ident_continue(ch: char) -> bool {
     ch == '_' || ch.is_ascii_alphanumeric()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tokenizes_basics() {
+        let tokens = tokenize("\\x. (x 42) λy.y").unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Lambda,
+                Token::Ident("x".to_string()),
+                Token::Dot,
+                Token::LParen,
+                Token::Ident("x".to_string()),
+                Token::Int(42),
+                Token::RParen,
+                Token::Lambda,
+                Token::Ident("y".to_string()),
+                Token::Dot,
+                Token::Ident("y".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_characters() {
+        assert!(tokenize("@").is_err());
+    }
+}

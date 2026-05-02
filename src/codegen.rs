@@ -1052,3 +1052,22 @@ impl<'ctx> Codegen<'ctx> {
 fn builder_err(err: BuilderError) -> String {
     err.to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::Expr;
+    use crate::transform::run_pipeline;
+
+    #[test]
+    fn emits_key_symbols_for_a_simple_closure() {
+        let expr = Expr::Lam("x".to_string(), Box::new(Expr::Var("x".to_string())));
+        let pipeline = run_pipeline(&expr);
+        let ir = generate_llvm_ir(&pipeline.anf).unwrap();
+
+        assert!(ir.contains("define i64 @main"));
+        assert!(ir.contains("@malloc"));
+        assert!(ir.contains("@print_int"));
+        assert!(ir.contains("@lam_f_0"));
+    }
+}
