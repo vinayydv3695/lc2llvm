@@ -205,3 +205,105 @@ impl Thunk {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::Expr;
+
+    fn eval_int(expr: Expr) -> i64 {
+        match eval(&expr).unwrap() {
+            Value::Int(n) => n,
+            other => panic!("expected int, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn evaluates_arithmetic_primitives() {
+        assert_eq!(
+            eval_int(Expr::App(
+                Box::new(Expr::App(
+                    Box::new(Expr::Prim("add".to_string())),
+                    Box::new(Expr::Int(2)),
+                )),
+                Box::new(Expr::Int(3)),
+            )),
+            5
+        );
+        assert_eq!(
+            eval_int(Expr::App(
+                Box::new(Expr::App(
+                    Box::new(Expr::Prim("sub".to_string())),
+                    Box::new(Expr::Int(7)),
+                )),
+                Box::new(Expr::Int(4)),
+            )),
+            3
+        );
+        assert_eq!(
+            eval_int(Expr::App(
+                Box::new(Expr::App(
+                    Box::new(Expr::Prim("mul".to_string())),
+                    Box::new(Expr::Int(6)),
+                )),
+                Box::new(Expr::Int(5)),
+            )),
+            30
+        );
+    }
+
+    #[test]
+    fn evaluates_booleans_and_if() {
+        match eval(&Expr::Prim("true".to_string())).unwrap() {
+            Value::Bool(true) => {}
+            other => panic!("unexpected value: {other:?}"),
+        }
+        match eval(&Expr::Prim("false".to_string())).unwrap() {
+            Value::Bool(false) => {}
+            other => panic!("unexpected value: {other:?}"),
+        }
+
+        let if_true = Expr::App(
+            Box::new(Expr::App(
+                Box::new(Expr::App(
+                    Box::new(Expr::Prim("if".to_string())),
+                    Box::new(Expr::Prim("true".to_string())),
+                )),
+                Box::new(Expr::Int(1)),
+            )),
+            Box::new(Expr::Int(2)),
+        );
+        let if_false = Expr::App(
+            Box::new(Expr::App(
+                Box::new(Expr::App(
+                    Box::new(Expr::Prim("if".to_string())),
+                    Box::new(Expr::Prim("false".to_string())),
+                )),
+                Box::new(Expr::Int(1)),
+            )),
+            Box::new(Expr::Int(2)),
+        );
+
+        assert_eq!(eval_int(if_true), 1);
+        assert_eq!(eval_int(if_false), 2);
+    }
+
+    #[test]
+    fn evaluates_closures() {
+        let expr = Expr::App(
+            Box::new(Expr::Lam(
+                "x".to_string(),
+                Box::new(Expr::App(
+                    Box::new(Expr::App(
+                        Box::new(Expr::Prim("add".to_string())),
+                        Box::new(Expr::Var("x".to_string())),
+                    )),
+                    Box::new(Expr::Int(2)),
+                )),
+            )),
+            Box::new(Expr::Int(3)),
+        );
+
+        assert_eq!(eval_int(expr), 5);
+    }
+}

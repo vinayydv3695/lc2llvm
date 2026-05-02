@@ -271,3 +271,83 @@ impl NameGen {
         format!("{}_{}_{}", self.prefix, stem, id)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::Expr;
+
+    #[test]
+    fn alpha_convert_makes_bindings_unique() {
+        let expr = Expr::Lam(
+            "x".to_string(),
+            Box::new(Expr::Lam(
+                "x".to_string(),
+                Box::new(Expr::Var("x".to_string())),
+            )),
+        );
+
+        let alpha = alpha_convert(&expr);
+        match alpha {
+            Expr::Lam(outer, body) => match *body {
+                Expr::Lam(inner, body) => match *body {
+                    Expr::Var(v) => {
+                        assert_ne!(outer, inner);
+                        assert_eq!(v, inner);
+                    }
+                    other => panic!("unexpected body: {other:?}"),
+                },
+                other => panic!("unexpected inner expr: {other:?}"),
+            },
+            other => panic!("unexpected expr: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn free_vars_excludes_bound_names() {
+        let expr = Expr::Lam(
+            "x".to_string(),
+            Box::new(Expr::App(
+                Box::new(Expr::Var("x".to_string())),
+                Box::new(Expr::Var("y".to_string())),
+            )),
+        );
+
+        let free = free_vars(&expr);
+        assert!(free.contains("y"));
+        assert!(!free.contains("x"));
+        assert_eq!(free.len(), 1);
+    }
+
+    #[test]
+    fn anf_has_let_chain_for_nested_apps() {
+        let program = LiftedProgram {
+            functions: Vec::new(),
+            main: LiftedExpr::App(
+                Box::new(LiftedExpr::App(
+                    Box::new(LiftedExpr::Prim("add".to_string())),
+                    Box::new(LiftedExpr::Int(1)),
+                )),
+                Box::new(LiftedExpr::Int(2)),
+            ),
+        };
+
+        let anf = anf_transform(&program);
+        match anf.main {
+            AnfExpr::Let(first, AnfRhs::App(AnfAtom::Prim(p), AnfAtom::Int(1)), rest) => {
+                assert_eq!(p, "add");
+                match *rest {
+                    AnfExpr::Let(second, AnfRhs::App(AnfAtom::Var(v), AnfAtom::Int(2)), tail) => {
+                        assert_eq!(v, first);
+                        match *tail {
+                            AnfExpr::Return(AnfAtom::Var(out)) => assert_eq!(out, second),
+                            other => panic!("unexpected tail: {other:?}"),
+                        }
+                    }
+                    other => panic!("unexpected rest: {other:?}"),
+                }
+            }
+            other => panic!("unexpected anf: {other:?}"),
+        }
+    }
+}

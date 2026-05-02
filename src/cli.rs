@@ -267,3 +267,60 @@ fn temp_path(prefix: &str, extension: &str) -> PathBuf {
 fn path_arg(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_compile_mode() {
+        let mode = parse_args(vec![
+            "lamc".to_string(),
+            "input.lc".to_string(),
+            "-o".to_string(),
+            "out.ll".to_string(),
+        ])
+        .unwrap();
+
+        match mode {
+            Mode::Compile { input, output } => {
+                assert_eq!(input, PathBuf::from("input.lc"));
+                assert_eq!(output, PathBuf::from("out.ll"));
+            }
+            _ => panic!("unexpected mode"),
+        }
+    }
+
+    #[test]
+    fn parses_interp_mode() {
+        let mode = parse_args(vec![
+            "lamc".to_string(),
+            "--interp".to_string(),
+            "input.lc".to_string(),
+        ])
+        .unwrap();
+
+        match mode {
+            Mode::Interp { input } => assert_eq!(input, PathBuf::from("input.lc")),
+            _ => panic!("unexpected mode"),
+        }
+    }
+
+    #[test]
+    fn parses_repl_mode() {
+        let mode = parse_args(vec!["lamc".to_string(), "--repl".to_string()]).unwrap();
+        assert!(matches!(mode, Mode::Repl));
+    }
+
+    #[test]
+    fn rejects_invalid_combinations() {
+        assert!(parse_args(vec![
+            "lamc".to_string(),
+            "--repl".to_string(),
+            "input.lc".to_string(),
+        ])
+        .is_err());
+
+        assert!(parse_args(vec!["lamc".to_string(), "--interp".to_string()]).is_err());
+    }
+}

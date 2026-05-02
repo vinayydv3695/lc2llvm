@@ -98,3 +98,61 @@ fn is_primitive(name: &str) -> bool {
         "print" | "add" | "sub" | "mul" | "true" | "false" | "if"
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::Expr;
+    use crate::lexer::tokenize;
+
+    #[test]
+    fn parses_application_left_associatively() {
+        let tokens = tokenize("f x y").unwrap();
+        let expr = parse(&tokens).unwrap();
+        assert_eq!(
+            expr,
+            Expr::App(
+                Box::new(Expr::App(
+                    Box::new(Expr::Var("f".to_string())),
+                    Box::new(Expr::Var("x".to_string())),
+                )),
+                Box::new(Expr::Var("y".to_string())),
+            )
+        );
+    }
+
+    #[test]
+    fn parses_lambda_and_primitives() {
+        let lam = parse(&tokenize("\\x. add x").unwrap()).unwrap();
+        assert_eq!(
+            lam,
+            Expr::Lam(
+                "x".to_string(),
+                Box::new(Expr::App(
+                    Box::new(Expr::Prim("add".to_string())),
+                    Box::new(Expr::Var("x".to_string())),
+                )),
+            )
+        );
+
+        assert_eq!(
+            parse(&tokenize("if").unwrap()).unwrap(),
+            Expr::Prim("if".to_string())
+        );
+    }
+
+    #[test]
+    fn parses_parenthesized_lambda() {
+        let expr = parse(&tokenize("(\\x. x) 1").unwrap()).unwrap();
+        assert_eq!(
+            expr,
+            Expr::App(
+                Box::new(Expr::Lam(
+                    "x".to_string(),
+                    Box::new(Expr::Var("x".to_string())),
+                )),
+                Box::new(Expr::Int(1)),
+            )
+        );
+    }
+}
